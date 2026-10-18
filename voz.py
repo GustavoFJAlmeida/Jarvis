@@ -9,9 +9,13 @@ Modelos (escolha em Sistema):
 - medium: entende melhor, mas é bem mais lento no processador
 """
 
+import difflib
 import io
 import os
+import re
 import threading
+import time
+import unicodedata
 import wave
 
 import banco
@@ -66,8 +70,43 @@ def ler_wav(audio):
     return som
 
 
-def transcrever(audio):
-    """Recebe o áudio gravado pela página. Devolve {"texto": ..., "erro": ...}."""
+# ---------- Chamar pelo nome ----------
+
+# Palavras que podem vir antes do nome: "ei Jarvis", "hey Jarvis", "ô Jarvis"...
+_SAUDACOES = {"ei", "hey", "hei", "ey", "oi", "ola", "o", "e", "fala", "alo", "ai"}
+# Jeitos que o Whisper às vezes escreve "Jarvis" em português
+_NOMES = {"jarvis", "jarvi", "jarves", "jervis", "javis", "jarbas", "jarbis", "jarvas", "djarvis"}
+
+
+def _normalizar(palavra):
+    sem_acento = unicodedata.normalize("NFD", palavra.lower())
+    sem_acento = "".join(c for c in sem_acento if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z]", "", sem_acento)
+
+
+def _parece_jarvis(palavra):
+    p = _normalizar(palavra)
+    return p in _NOMES or (len(p) >= 5 and difflib.SequenceMatcher(None, p, "jarvis").ratio() >= 0.8)
+
+
+def detectar_chamado(texto):
+    """A frase começa chamando o Jarvis? Devolve (chamou, comando).
+    'Jarvis, que horas são?' -> (True, 'que horas são?')
+    'Ei Jarvis.'             -> (True, '')   (chamou, mas não disse o quê)
+    'o jarvis é legal'       -> (False, '')  (o nome não está no começo)"""
+    palavras = (texto or "").split()
+    for i, palavra in enumerate(palavras[:3]):
+        if _parece_jarvis(palavra):
+            resto = " ".join(palavras[i + 1:]).strip()
+            return True, resto.lstrip(",.!?;: ").strip()
+        if _normalizar(palavra) not in _SAUDACOES:
+            break
+    return False, ""
+
+
+def transcrever(audio, registrar_fala=True):
+    """Recebe o áudio gravado pela página. Devolve {"texto": ..., "erro": ...}.
+    registrar_fala=False (modo escuta): o que foi ouvido não vai para o Registro."""
     if not audio:
         return {"texto": "", "erro": None}
     if len(audio) > TAMANHO_MAXIMO:
@@ -75,18 +114,36 @@ def transcrever(audio):
     try:
         with _trava:  # um áudio por vez: o processador é um só
             modelo = _modelo()
+            inicio = time.time()
             entrada = ler_wav(audio) if eh_wav(audio) else io.BytesIO(audio)
             trechos, _info = modelo.transcribe(
                 entrada,
                 language="pt",
+                beam_size=1,  # mais rápido; para frases curtas a precisão quase não muda
                 vad_filter=True,  # ignora os silêncios
                 initial_prompt="Conversa em português com o assistente Jarvis.",
             )
             texto = " ".join(t.text.strip() for t in trechos).strip()
+            duracao = time.time() - inicio
     except ImportError:
         return {"texto": "", "erro": "Falta instalar a voz. No terminal (com o .venv ativo): pip install -r requirements.txt"}
     except Exception as erro:
         banco.registrar("erro", f"Transcrição falhou: {erro}")
         return {"texto": "", "erro": f"Não consegui entender o áudio ({type(erro).__name__})."}
-    banco.registrar("voz", f"Ouvi: {texto}" if texto else "Ouvi só silêncio")
-    return {"texto": texto, "erro": None}
+    if registrar_fala:
+        banco.registrar("voz", f"Ouvi: {texto}" if texto else "Ouvi só silêncio")
+        banco.registrar("tempo", f"Ouvido: transcrição em {duracao:.1f} s")
+    return {"texto": texto, "erro": None, "segundos": round(duracao, 1)}
+
+
+def escutar(audio):
+    """Modo escuta: só devolve o que foi dito se a frase começar com 'Jarvis'.
+    O resto é descartado e não fica registrado em lugar nenhum."""
+    resultado = transcrever(audio, registrar_fala=False)
+    if resultado["erro"]:
+        return {"chamou": False, "comando": "", "erro": resultado["erro"]}
+    chamou, comando = detectar_chamado(resultado["texto"])
+    if chamou:
+        banco.registrar("voz", f"Chamado pelo nome: {comando or '(só o nome)'}")
+        banco.registrar("tempo", f"Ouvido (escuta): transcrição em {resultado['segundos']:.1f} s")
+    return {"chamou": chamou, "comando": comando, "erro": None}

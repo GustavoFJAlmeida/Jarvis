@@ -117,6 +117,8 @@ main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden}
 .quadrado.enviar{background:var(--ciano);color:#03131C;border-color:var(--ciano)}
 .quadrado.enviar:hover{box-shadow:0 0 18px rgba(57,230,255,.6)}
 .quadrado:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+.quadrado.escutando{color:#03131C;background:var(--ciano);border-color:var(--ciano);box-shadow:0 0 16px rgba(57,230,255,.5)}
+.pilula[hidden]{display:none}
 .quadrado.gravando{background:var(--laranja);color:#170C00;border-color:var(--laranja);animation:pulsarBtn 1s ease-in-out infinite}
 @keyframes pulsarBtn{50%{box-shadow:0 0 22px rgba(255,159,28,.8)}}
 .reator.ouvindo .nucleo{animation:pulsar .6s ease-in-out infinite}
@@ -173,6 +175,7 @@ main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden}
 .campo input,.campo select{min-height:46px;padding:0 14px;background:var(--painel-forte);border:1px solid var(--linha-forte);outline:none}
 .campo select option{background:#07182A}
 .campo input:focus,.campo select:focus{border-color:var(--ciano)}
+.campo input[type=range]{min-height:auto;padding:0;background:none;border:0;accent-color:var(--ciano);height:28px}
 .status-cfg{padding:12px 16px;font-family:var(--mono);font-size:14px;max-width:640px}
 .status-cfg.ok{border-color:var(--linha-forte);color:var(--ciano)}
 .status-cfg.ruim{border-color:rgba(255,85,119,.6);color:var(--perigo)}
@@ -224,6 +227,7 @@ main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden}
 <header class="barra">
   <span class="logo">J.A.R.V.I.S.</span>
   <span class="pilula"><span class="luz" id="status"></span><span id="status-txt">OFFLINE</span></span>
+  <span class="pilula" id="pilula-escuta" hidden><span class="luz on"></span>ESCUTANDO "JARVIS"</span>
   <div class="dir">
     <span class="cerebro-topo" id="cerebro-topo">--</span>
     <span class="data-topo" id="data-topo">--</span>
@@ -288,6 +292,9 @@ main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden}
       <form class="entrada" id="form">
         <button type="button" class="quadrado" id="mic" title="Falar com o Jarvis (clique, fale e espere)" aria-label="Falar com o Jarvis" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+        <button type="button" class="quadrado" id="escuta" title="Modo escuta: diga &quot;Jarvis&quot; e o seu pedido, sem clicar" aria-label="Modo escuta (chamar pelo nome)" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>
         </button>
         <label for="texto" class="sr">Mensagem</label>
         <textarea id="texto" rows="1" placeholder="Comando para o Jarvis..."></textarea>
@@ -367,10 +374,18 @@ main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden}
         <option value="medium">medium: entende melhor, bem mais lento</option>
       </select>
       <small>Na primeira vez que você falar, o modelo é baixado (o small tem uns 500 MB).</small></div>
+    <div class="campo"><label for="ABRIR_JARVIS">Abrir o Jarvis em</label>
+      <select id="ABRIR_JARVIS">
+        <option value="janela">Janela própria do Edge (vozes naturais)</option>
+        <option value="padrao">Navegador padrão</option>
+      </select>
+      <small>Vale da próxima vez que você abrir o Jarvis.</small></div>
     <div><button class="btn primario" type="submit">Salvar e reiniciar cérebro</button></div>
   </form>
   <div class="hud campos">
     <div class="campo"><label for="voz">Voz das respostas</label><select id="voz"></select><small id="info-voz"></small></div>
+    <div class="campo"><label for="velocidade">Velocidade da voz: <span id="velocidade-valor"></span></label>
+      <input type="range" id="velocidade" min="0.8" max="1.8" step="0.05"></div>
     <div><button class="btn" type="button" id="testar-voz">Testar voz</button></div>
   </div>
 </section>
@@ -521,7 +536,7 @@ $("alerta-ver").addEventListener("click", () => { $("alerta").hidden = true; abr
 function pensando(ativo, texto) {
   esperando = ativo;
   $("orbe").classList.toggle("pensando", ativo);
-  $("estado").textContent = texto || (ativo ? "Processando" : "Pronto");
+  $("estado").textContent = texto || (ativo ? "Processando" : escuta.ligada ? "Escutando" : "Pronto");
   $("enviar").disabled = ativo;
 }
 
@@ -544,10 +559,13 @@ function conectar() {
     const dados = JSON.parse(evento.data);
     if (dados.tipo === "parcial") {
       escrevendo(dados.texto);
+      falarParcial(dados.texto);
     } else if (dados.tipo === "descartar") {
       descartarBalao();
+      if (respostaFalada) { pararDeFalar(); falaJaEnviada = ""; } // nunca fala uma resposta falsa até o fim
     } else if (dados.tipo === "ferramenta") {
       fecharBalao();
+      falaJaEnviada = "";
       $("estado").textContent = `Usando ${dados.nome.replace(/_/g, " ")}`;
       $("mensagens").appendChild(elemento("div", "uso", dados.nome));
       rolarSeNoFim(false);
@@ -561,8 +579,9 @@ function conectar() {
       mostrarBadge(dados.avisos);
       pensando(false);
       atualizarPainel();
-      if (respostaFalada) falar(dados.texto);
+      if (respostaFalada) falarFinal(dados.texto);
       respostaFalada = false;
+      falaJaEnviada = "";
     } else if (dados.tipo === "lembrete") {
       mostrarBadge(dados.avisos);
       mostrarAlerta(dados.titulo, dados.texto);
@@ -589,7 +608,7 @@ function ouvindo(ativo, texto) {
   $("mic").classList.toggle("gravando", ativo);
   $("mic").setAttribute("aria-pressed", ativo ? "true" : "false");
   $("orbe").classList.toggle("ouvindo", ativo);
-  $("estado").textContent = texto || (ativo ? "Ouvindo" : "Pronto");
+  $("estado").textContent = texto || (ativo ? "Ouvindo" : escuta.ligada ? "Escutando" : "Pronto");
 }
 
 async function comecarGravar() {
@@ -627,7 +646,7 @@ function soltarMicrofone() {
   if (ctxAudio) { ctxAudio.close().catch(() => {}); ctxAudio = null; }
 }
 
-/* para sozinho quando você fica 1,5 s em silêncio depois de falar.
+/* para sozinho quando você fica 1,2 s em silêncio depois de falar.
    O "barulho de fundo" é o volume mais baixo ouvido até agora (não só o começo),
    para funcionar mesmo se você começar a falar logo depois de clicar. */
 function vigiarSilencio(fluxo) {
@@ -650,7 +669,7 @@ function vigiarSilencio(fluxo) {
       if (agora - inicio > 100) piso = Math.min(piso, suave);
       const limiar = Math.min(0.08, Math.max(0.02, (isFinite(piso) ? piso : 0) * 3));
       if (suave > limiar) { falou = true; ultimoSom = agora; }
-      if (falou && agora - ultimoSom > 1500) return pararGravar();
+      if (falou && agora - ultimoSom > 1200) return pararGravar();
       if (!falou && agora - inicio > 8000) return pararGravar(); // ninguém falou
       setTimeout(passo, 50);
     };
@@ -671,7 +690,22 @@ async function paraWav16k(gravacao) {
   fonte.buffer = som;
   fonte.connect(offline.destination);
   fonte.start();
-  const mono = (await offline.startRendering()).getChannelData(0);
+  return wavDeAmostras((await offline.startRendering()).getChannelData(0), taxa);
+}
+
+/* amostras de áudio (qualquer taxa) -> WAV 16 kHz mono, 16 bits */
+function wavDeAmostras(origem, taxaOrigem) {
+  const taxa = 16000;
+  let mono = origem;
+  if (taxaOrigem !== taxa) {
+    const total = Math.floor(origem.length * taxa / taxaOrigem);
+    mono = new Float32Array(total);
+    const passo = taxaOrigem / taxa;
+    for (let i = 0; i < total; i++) {
+      const pos = i * passo, a = Math.floor(pos), b = Math.min(a + 1, origem.length - 1), f = pos - a;
+      mono[i] = origem[a] * (1 - f) + origem[b] * f;
+    }
+  }
   const bytes = new ArrayBuffer(44 + mono.length * 2);
   const v = new DataView(bytes);
   const texto = (pos, t) => { for (let i = 0; i < t.length; i++) v.setUint8(pos + i, t.charCodeAt(i)); };
@@ -716,6 +750,165 @@ $("mic").addEventListener("click", () => {
   else comecarGravar();
 });
 
+/* ---------- Modo escuta: "Jarvis, ..." sem clicar ----------
+   A página fica ouvindo. Quando alguém fala, o trecho vai para o Whisper; só se a
+   frase começar com "Jarvis" o pedido é executado. O resto é descartado no servidor
+   e não fica registrado. Usa AudioWorklet (não é freado em aba de fundo). */
+const escuta = { ligada: false, ctx: null, fluxo: null, ocupado: false, taxa: 48000,
+                 antes: [], trecho: null, tamanho: 0, fala: 0, silencio: 0, suave: 0, piso: Infinity, erroMostrado: false };
+const CODIGO_ESCUTA = `class EscutaJarvis extends AudioWorkletProcessor {
+  constructor() { super(); this.b = new Float32Array(2048); this.n = 0; }
+  process(entradas) {
+    const canal = entradas[0] && entradas[0][0];
+    if (canal) for (let i = 0; i < canal.length; i++) {
+      this.b[this.n++] = canal[i];
+      if (this.n === this.b.length) { this.port.postMessage(this.b.slice(0)); this.n = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor("escuta-jarvis", EscutaJarvis);`;
+
+function escutaPausada() {
+  return escuta.ocupado || esperando
+    || (gravador && gravador.state === "recording")
+    || (window.speechSynthesis && speechSynthesis.speaking)
+    || !$("alerta").hidden;
+}
+
+function aoReceberAudio(bloco) {
+  if (!escuta.ligada) return;
+  if (escutaPausada()) { escuta.trecho = null; escuta.antes = []; return; }
+  let soma = 0;
+  for (let i = 0; i < bloco.length; i++) soma += bloco[i] * bloco[i];
+  const volume = Math.sqrt(soma / bloco.length);
+  escuta.suave = escuta.suave ? escuta.suave * 0.6 + volume * 0.4 : volume;
+  // barulho de fundo: desce na hora, sobe devagar (acompanha o ambiente)
+  escuta.piso = escuta.suave < escuta.piso ? escuta.suave : escuta.piso + (escuta.suave - escuta.piso) * 0.005;
+  const limiar = Math.min(0.1, Math.max(0.02, escuta.piso * 3));
+  const falando = escuta.suave > limiar; // suavizado: decide quando a fala acabou
+  const somDeVerdade = volume > limiar;  // real: conta quanto tempo teve som de fato
+  const taxa = escuta.taxa;
+
+  if (!escuta.trecho) {
+    // guarda o último meio segundo, para não cortar o começo do "Jarvis"
+    escuta.antes.push(bloco);
+    let guardado = escuta.antes.reduce((t, b) => t + b.length, 0);
+    while (guardado > taxa * 0.5 && escuta.antes.length > 1) guardado -= escuta.antes.shift().length;
+    if (falando) {
+      escuta.trecho = escuta.antes;
+      escuta.tamanho = guardado;
+      escuta.antes = [];
+      escuta.fala = somDeVerdade ? bloco.length : 0;
+      escuta.silencio = 0;
+    }
+    return;
+  }
+  escuta.trecho.push(bloco);
+  escuta.tamanho += bloco.length;
+  if (somDeVerdade) escuta.fala += bloco.length;
+  if (falando) escuta.silencio = 0;
+  else escuta.silencio += bloco.length;
+  if (escuta.silencio > taxa * 0.8 || escuta.tamanho > taxa * 8) finalizarTrecho();
+}
+
+async function finalizarTrecho() {
+  const partes = escuta.trecho, fala = escuta.fala, tamanho = escuta.tamanho;
+  escuta.trecho = null;
+  escuta.antes = [];
+  if (fala < escuta.taxa * 0.3) return; // estalo ou tosse: ignora
+  escuta.ocupado = true;
+  const juntas = new Float32Array(tamanho);
+  let pos = 0;
+  for (const b of partes) { juntas.set(b, pos); pos += b.length; }
+  let r;
+  try {
+    const resposta = await fetch("/api/ouvir?modo=escuta", { method: "POST", body: wavDeAmostras(juntas, escuta.taxa) });
+    r = await resposta.json();
+  } catch {
+    r = { chamou: false, erro: null };
+  }
+  escuta.ocupado = false;
+  if (r.erro) {
+    if (!escuta.erroMostrado) adicionarMensagem("jarvis", "Modo escuta: " + r.erro);
+    escuta.erroMostrado = true;
+    return;
+  }
+  if (!r.chamou || esperando) return;
+  if (r.comando) {
+    $("texto").value = r.comando;
+    respostaFalada = true;
+    $("form").requestSubmit();
+  } else {
+    falar("Sim?", () => comecarGravar()); // chamou só o nome: espera o pedido
+  }
+}
+
+function mostrarEscuta(ligada) {
+  $("escuta").classList.toggle("escutando", ligada);
+  $("escuta").setAttribute("aria-pressed", ligada ? "true" : "false");
+  $("pilula-escuta").hidden = !ligada;
+  if (!esperando && !(gravador && gravador.state === "recording")) $("estado").textContent = ligada ? "Escutando" : "Pronto";
+}
+
+async function ligarEscuta() {
+  if (!window.AudioWorkletNode || !navigator.mediaDevices) {
+    adicionarMensagem("jarvis", "Este navegador não tem o que o modo escuta precisa. Use o Chrome ou o Edge.");
+    return false;
+  }
+  try {
+    escuta.fluxo = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch {
+    adicionarMensagem("jarvis", "Não consegui usar o microfone. Clique no cadeado ao lado do endereço, permita o microfone e tente de novo.");
+    return false;
+  }
+  try {
+    escuta.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    escuta.taxa = escuta.ctx.sampleRate;
+    const url = URL.createObjectURL(new Blob([CODIGO_ESCUTA], { type: "application/javascript" }));
+    try { await escuta.ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+    const no = new AudioWorkletNode(escuta.ctx, "escuta-jarvis");
+    no.port.onmessage = (e) => aoReceberAudio(e.data);
+    const mudo = escuta.ctx.createGain();
+    mudo.gain.value = 0;
+    escuta.ctx.createMediaStreamSource(escuta.fluxo).connect(no);
+    no.connect(mudo);
+    mudo.connect(escuta.ctx.destination);
+  } catch {
+    desligarEscuta();
+    adicionarMensagem("jarvis", "Não consegui ligar o modo escuta neste navegador.");
+    return false;
+  }
+  Object.assign(escuta, { ligada: true, antes: [], trecho: null, suave: 0, piso: Infinity, erroMostrado: false });
+  mostrarEscuta(true);
+  if (escuta.ctx.state === "suspended") {
+    // o navegador só libera o áudio depois de um clique na página
+    $("estado").textContent = "Clique na página para ativar";
+    document.addEventListener("click", () => { if (escuta.ctx) escuta.ctx.resume().then(() => mostrarEscuta(escuta.ligada)); }, { once: true });
+  }
+  return true;
+}
+
+function desligarEscuta() {
+  escuta.ligada = false;
+  if (escuta.fluxo) escuta.fluxo.getTracks().forEach((t) => t.stop());
+  if (escuta.ctx) escuta.ctx.close().catch(() => {});
+  Object.assign(escuta, { fluxo: null, ctx: null, trecho: null, antes: [] });
+  mostrarEscuta(false);
+}
+
+function lembrarEscuta(valor) {
+  try {
+    if (valor === undefined) return localStorage.getItem("jarvis-escuta") === "1";
+    localStorage.setItem("jarvis-escuta", valor ? "1" : "0");
+  } catch { return false; }
+}
+
+$("escuta").addEventListener("click", async () => {
+  if (escuta.ligada) { desligarEscuta(); lembrarEscuta(false); }
+  else if (await ligarEscuta()) lembrarEscuta(true);
+});
+
 /* fala: usa as vozes do próprio Windows/navegador (não precisa instalar nada) */
 function chaveVoz(valor) {
   try {
@@ -729,7 +922,12 @@ function vozesPortugues() {
 }
 function vozEscolhida() {
   const vozes = vozesPortugues();
-  return vozes.find((v) => v.name === chaveVoz()) || vozes.find((v) => v.lang === "pt-BR") || vozes[0] || null;
+  const natural = (v) => /natural|online/i.test(v.name) && v.lang === "pt-BR";
+  return vozes.find((v) => v.name === chaveVoz())
+    || vozes.find((v) => natural(v) && /antonio/i.test(v.name))
+    || vozes.find(natural)
+    || vozes.find((v) => v.lang === "pt-BR")
+    || vozes[0] || null;
 }
 function textoParaFalar(texto) {
   return (texto || "")
@@ -740,18 +938,62 @@ function textoParaFalar(texto) {
     .replace(/\s+([.,!?;:])/g, "$1")
     .trim();
 }
-function falar(texto) {
-  if (!window.speechSynthesis) return;
-  const limpo = textoParaFalar(texto);
-  if (!limpo) return;
-  speechSynthesis.cancel();
+function velocidadeVoz(valor) {
+  try {
+    if (valor !== undefined) localStorage.setItem("jarvis-velocidade", String(valor));
+    const v = parseFloat(localStorage.getItem("jarvis-velocidade"));
+    return isFinite(v) ? Math.min(1.8, Math.max(0.8, v)) : 1.15;
+  } catch { return 1.15; }
+}
+function novaFala(limpo, aoTerminar) {
   const fala = new SpeechSynthesisUtterance(limpo);
   const voz = vozEscolhida();
   if (voz) fala.voice = voz;
   fala.lang = voz ? voz.lang : "pt-BR";
+  fala.rate = velocidadeVoz();
   fala.onstart = () => { $("orbe").classList.add("pensando"); $("estado").textContent = "Falando"; };
-  fala.onend = fala.onerror = () => { $("orbe").classList.remove("pensando"); if (!esperando) $("estado").textContent = "Pronto"; };
-  speechSynthesis.speak(fala);
+  fala.onend = fala.onerror = () => {
+    if (!speechSynthesis.pending) {
+      $("orbe").classList.remove("pensando");
+      if (!esperando) $("estado").textContent = escuta.ligada ? "Escutando" : "Pronto";
+    }
+    if (aoTerminar) aoTerminar();
+  };
+  return fala;
+}
+/* fala agora, interrompendo o que estiver falando */
+function falar(texto, aoTerminar) {
+  const fim = typeof aoTerminar === "function" ? aoTerminar : () => {};
+  if (!window.speechSynthesis) return fim();
+  const limpo = textoParaFalar(texto);
+  if (!limpo) return fim();
+  speechSynthesis.cancel();
+  speechSynthesis.speak(novaFala(limpo, fim));
+}
+/* fala depois do que já está na fila (para ir falando a resposta frase por frase) */
+function enfileirarFala(texto) {
+  if (!window.speechSynthesis) return;
+  const limpo = textoParaFalar(texto);
+  if (limpo) speechSynthesis.speak(novaFala(limpo));
+}
+/* enquanto a resposta chega, cada frase completa já vai para a fala */
+let falaJaEnviada = "";
+function falarParcial(texto) {
+  if (!respostaFalada || !texto.startsWith(falaJaEnviada)) return;
+  const pendente = texto.slice(falaJaEnviada.length);
+  const fimDeFrase = /[.!?…]+(?=\s)|\n+/g;
+  let corte = -1, achou;
+  while ((achou = fimDeFrase.exec(pendente))) corte = achou.index + achou[0].length;
+  if (corte <= 0) return;
+  const frase = pendente.slice(0, corte);
+  falaJaEnviada += frase;
+  enfileirarFala(frase);
+}
+function falarFinal(texto) {
+  if (!falaJaEnviada) enfileirarFala(texto);
+  else if (texto.startsWith(falaJaEnviada)) enfileirarFala(texto.slice(falaJaEnviada.length));
+  else falar(texto); // a resposta final mudou: fala a versão certa do começo
+  falaJaEnviada = "";
 }
 function pararDeFalar() {
   if (window.speechSynthesis) speechSynthesis.cancel();
@@ -902,7 +1144,7 @@ $("form-mem").addEventListener("submit", async (e) => {
 });
 
 /* ---------- Sistema ---------- */
-const CAMPOS = ["CEREBRO", "OLLAMA_MODELO", "CLAUDE_MODELO", "CIDADE_PADRAO", "WHISPER_MODELO"];
+const CAMPOS = ["CEREBRO", "OLLAMA_MODELO", "CLAUDE_MODELO", "CIDADE_PADRAO", "WHISPER_MODELO", "ABRIR_JARVIS"];
 function preencherModelos(lista, atual) {
   const sel = $("OLLAMA_MODELO");
   sel.innerHTML = "";
@@ -941,6 +1183,12 @@ $("form-cfg").addEventListener("submit", async (e) => {
 });
 
 $("voz").addEventListener("change", () => chaveVoz($("voz").value));
+function mostrarVelocidade() {
+  $("velocidade").value = velocidadeVoz();
+  $("velocidade-valor").textContent = velocidadeVoz().toFixed(2).replace(".", ",") + "x";
+}
+$("velocidade").addEventListener("input", () => { velocidadeVoz($("velocidade").value); mostrarVelocidade(); });
+mostrarVelocidade();
 $("testar-voz").addEventListener("click", () => falar("Olá! Eu sou o Jarvis. Sistemas online."));
 
 /* ---------- Registro ---------- */
@@ -961,6 +1209,7 @@ $("atualizar-reg").addEventListener("click", () => carregadores.registro());
 
 /* ---------- Início ---------- */
 (async () => {
+  if (lembrarEscuta()) ligarEscuta();
   await carregarHistorico();
   atualizarPainel();
   conectar();

@@ -346,7 +346,7 @@ class Voz(unittest.TestCase):
 
     def test_transcreve_em_portugues(self):
         r = voz.transcrever(b"audio-webm")
-        self.assertEqual(r, {"texto": "que horas são", "erro": None})
+        self.assertEqual((r["texto"], r["erro"]), ("que horas são", None))
         audio, opcoes = whisper_falso.chamadas[-1]
         self.assertEqual(audio, b"audio-webm")
         self.assertEqual(opcoes["language"], "pt")
@@ -374,7 +374,8 @@ class Voz(unittest.TestCase):
 
     def test_silencio(self):
         whisper_falso.texto = ""
-        self.assertEqual(voz.transcrever(b"x"), {"texto": "", "erro": None})
+        r = voz.transcrever(b"x")
+        self.assertEqual((r["texto"], r["erro"]), ("", None))
 
     def test_audio_vazio_nem_chama_o_whisper(self):
         self.assertEqual(voz.transcrever(b"")["texto"], "")
@@ -432,6 +433,100 @@ class Voz(unittest.TestCase):
     def test_configuracao_tem_padrao(self):
         os.environ.pop("WHISPER_MODELO", None)
         self.assertEqual(servidor._configuracoes_atuais()["WHISPER_MODELO"], "small")
+
+
+class ChamarPeloNome(unittest.TestCase):
+    """Modo escuta: só obedece se a frase começar com 'Jarvis'."""
+
+    def setUp(self):
+        voz._carregado.update(nome=None, modelo=None)
+        whisper_falso.chamadas.clear()
+
+    def test_frases_que_chamam(self):
+        casos = {
+            "Jarvis, que horas são?": "que horas são?",
+            "Ei Jarvis abre o YouTube": "abre o YouTube",
+            "Jervis que horas são": "que horas são",
+            "Járvis me lembra de estudar": "me lembra de estudar",
+            "Jarbas, vai chover?": "vai chover?",
+            "Hey, Jarvis.": "",
+            "ô Jarvis!": "",
+        }
+        for frase, comando in casos.items():
+            self.assertEqual(voz.detectar_chamado(frase), (True, comando), frase)
+
+    def test_frases_que_nao_chamam(self):
+        for frase in ["Hoje o Jarvis travou", "vou jogar minecraft", "Javi, vem cá", "Jardim bonito",
+                      "Jarra de água", "", "o professor falou do Jarvis"]:
+            self.assertEqual(voz.detectar_chamado(frase), (False, ""), frase)
+
+    def test_escuta_devolve_o_comando(self):
+        whisper_falso.texto = "Jarvis, que horas são?"
+        self.assertEqual(voz.escutar(b"x"), {"chamou": True, "comando": "que horas são?", "erro": None})
+
+    def test_conversa_alheia_nao_fica_registrada(self):
+        whisper_falso.texto = "minha senha do wifi é 1234"
+        self.assertEqual(voz.escutar(b"x"), {"chamou": False, "comando": "", "erro": None})
+        registro = " ".join(r["detalhe"] for r in banco.registro(50))
+        self.assertNotIn("senha", registro)
+
+    def test_erro_de_voz_chega_na_escuta(self):
+        sys.modules["faster_whisper"] = None
+        try:
+            r = voz.escutar(b"x")
+        finally:
+            sys.modules["faster_whisper"] = whisper_falso
+        self.assertFalse(r["chamou"])
+        self.assertIn("pip install", r["erro"])
+
+
+class AbrirJarvis(unittest.TestCase):
+    """O Jarvis abre numa janela própria do Edge (vozes naturais); sem Edge, no navegador padrão."""
+
+    def setUp(self):
+        self.abertos = []
+        self.popen_original = __import__("subprocess").Popen
+        self.webbrowser_original = servidor.webbrowser.open
+        __import__("subprocess").Popen = lambda args, **k: self.abertos.append(("edge", args))
+        servidor.webbrowser.open = lambda url: self.abertos.append(("padrao", url))
+        self.caminho_original = servidor.caminho_do_edge
+        os.environ.pop("ABRIR_JARVIS", None)
+
+    def tearDown(self):
+        __import__("subprocess").Popen = self.popen_original
+        servidor.webbrowser.open = self.webbrowser_original
+        servidor.caminho_do_edge = self.caminho_original
+        os.environ.pop("ABRIR_JARVIS", None)
+
+    def test_abre_no_edge_como_janela(self):
+        servidor.caminho_do_edge = lambda: r"C:\Edge\msedge.exe"
+        self.assertEqual(servidor.abrir_interface("http://127.0.0.1:8000"), "edge")
+        tipo, args = self.abertos[-1]
+        self.assertEqual(tipo, "edge")
+        self.assertIn("--app=http://127.0.0.1:8000", args)
+
+    def test_sem_edge_abre_no_padrao(self):
+        servidor.caminho_do_edge = lambda: None
+        self.assertEqual(servidor.abrir_interface("http://127.0.0.1:8000"), "padrao")
+
+    def test_escolheu_navegador_padrao(self):
+        servidor.caminho_do_edge = lambda: r"C:\Edge\msedge.exe"
+        os.environ["ABRIR_JARVIS"] = "padrao"
+        self.assertEqual(servidor.abrir_interface("http://127.0.0.1:8000"), "padrao")
+
+    def test_padrao_e_janela(self):
+        self.assertEqual(servidor._configuracoes_atuais()["ABRIR_JARVIS"], "janela")
+
+
+class Velocidade(unittest.TestCase):
+
+    def test_whisper_rapido_e_tempo_no_registro(self):
+        voz._carregado.update(nome=None, modelo=None)
+        whisper_falso.texto = "que horas são"
+        r = voz.transcrever(b"x")
+        self.assertEqual(whisper_falso.chamadas[-1][1]["beam_size"], 1)
+        self.assertIn("segundos", r)
+        self.assertTrue(any(x["tipo"] == "tempo" and "transcrição" in x["detalhe"] for x in banco.registro(20)))
 
 
 class Sistema(unittest.TestCase):

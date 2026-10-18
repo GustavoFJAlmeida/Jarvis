@@ -164,7 +164,7 @@ O `python jarvis.py` (chat no terminal) continua funcionando também.
    pip install -r requirements.txt
    ```
 2. Clique no **microfone**, fale e espere: ele para sozinho quando você fica
-   1,5 segundo em silêncio (ou clique de novo para parar).
+   1,2 segundo em silêncio (ou clique de novo para parar).
 3. O Jarvis responde em voz alta quando a pergunta foi falada.
    Perguntas digitadas continuam só em texto.
 
@@ -175,6 +175,29 @@ O `python jarvis.py` (chat no terminal) continua funcionando também.
   voz das respostas, com um botão para testar.
 - A voz das respostas usa as vozes do Windows. Se não aparecer nenhuma em
   português: Configurações do Windows > Hora e idioma > Fala > Adicionar vozes.
+
+## Modo escuta: chamar pelo nome (Fase 4B)
+
+- Clique no botão de **ondas** (ao lado do microfone). Aparece "ESCUTANDO JARVIS" no topo.
+- Diga **"Jarvis, que horas são?"** (ou "Ei Jarvis, ..."). Ele só obedece frases que
+  **começam** com o nome. Se você disser só "Jarvis", ele responde "Sim?" e espera o pedido.
+- O que não começa com "Jarvis" é descartado no seu PC e não fica registrado.
+- A página do Jarvis precisa ficar aberta (pode ser em outra aba ou minimizada).
+  O navegador mostra o ícone de microfone em uso enquanto a escuta está ligada.
+- Ele não se escuta enquanto está falando.
+- O modo fica ligado da próxima vez que você abrir. Se aparecer "Clique na página
+  para ativar", é só clicar em qualquer lugar.
+
+## Voz mais natural
+
+O Jarvis abre numa **janela própria do Microsoft Edge** (sem abas, como um programa).
+É o Edge que tem as vozes "Natural" em português (Antonio e Francisca), bem melhores
+que as vozes antigas do Windows que o Opera e outros navegadores usam.
+O Jarvis escolhe a voz Antonio sozinho. Em **Sistema** dá para trocar a voz,
+ajustar a **velocidade** e voltar a abrir no navegador padrão.
+
+Ele começa a falar a resposta frase por frase, sem esperar ela terminar.
+O tempo de cada etapa (transcrição e cérebro) aparece no **Registro**, como "tempo".
 
 ## Testes
 

@@ -144,17 +144,27 @@ async def conversa_ao_vivo(socket: WebSocket):
 
             banco.salvar_mensagem("usuario", texto)
 
+            tempos = {"inicio": time.time(), "primeira": None}
+
+            def ao_escrever(parcial):
+                if tempos["primeira"] is None:
+                    tempos["primeira"] = time.time()
+                mandar({"tipo": "parcial", "texto": parcial})
+
             def pensar():
                 with trava_cerebro:
                     return cerebro.conversar(
                         texto,
                         lambda nome: mandar({"tipo": "ferramenta", "nome": nome}),
-                        ao_escrever=lambda parcial: mandar({"tipo": "parcial", "texto": parcial}),
+                        ao_escrever=ao_escrever,
                         ao_descartar=lambda: mandar({"tipo": "descartar"}),
                     )
 
             try:
                 resposta = await asyncio.to_thread(pensar)
+                fim = time.time()
+                primeira = f"{tempos['primeira'] - tempos['inicio']:.1f} s" if tempos["primeira"] else "-"
+                banco.registrar("tempo", f"Cérebro: primeira palavra em {primeira}, resposta completa em {fim - tempos['inicio']:.1f} s")
             except Exception as erro:
                 banco.registrar("erro", str(erro))
                 resposta = f"Deu um erro: {erro}"
@@ -308,11 +318,11 @@ def listar_registro():
 
 # ---------- Configurações ----------
 
-CAMPOS = ["CEREBRO", "OLLAMA_MODELO", "CLAUDE_MODELO", "CIDADE_PADRAO", "WHISPER_MODELO"]
+CAMPOS = ["CEREBRO", "OLLAMA_MODELO", "CLAUDE_MODELO", "CIDADE_PADRAO", "WHISPER_MODELO", "ABRIR_JARVIS"]
 
 
 PADROES = {"CEREBRO": "ollama", "OLLAMA_MODELO": "qwen2.5:7b", "WHISPER_MODELO": "small",
-           "CIDADE_PADRAO": "São José dos Campos"}
+           "CIDADE_PADRAO": "São José dos Campos", "ABRIR_JARVIS": "janela"}
 
 
 class Configuracoes(BaseModel):
@@ -321,6 +331,7 @@ class Configuracoes(BaseModel):
     CLAUDE_MODELO: str | None = None
     CIDADE_PADRAO: str | None = None
     WHISPER_MODELO: str | None = None
+    ABRIR_JARVIS: str | None = None
     ANTHROPIC_API_KEY: str | None = None
 
 
@@ -340,6 +351,8 @@ def _configuracoes_atuais():
 async def ouvir(request: Request):
     """Recebe a gravação do microfone e devolve o texto falado."""
     audio = await request.body()
+    if request.query_params.get("modo") == "escuta":
+        return await asyncio.to_thread(voz.escutar, audio)
     return await asyncio.to_thread(voz.transcrever, audio)
 
 
@@ -375,12 +388,39 @@ def salvar_configuracoes(novas: Configuracoes):
     return _configuracoes_atuais()
 
 
+def caminho_do_edge():
+    """Onde está o Microsoft Edge (vem com o Windows). None se não achar."""
+    import shutil
+
+    candidatos = [
+        shutil.which("msedge"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), r"Microsoft\Edge\Application\msedge.exe"),
+        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), r"Microsoft\Edge\Application\msedge.exe"),
+    ]
+    return next((c for c in candidatos if c and os.path.exists(c)), None)
+
+
+def abrir_interface(endereco):
+    """Abre o Jarvis numa janela própria do Edge (sem abas, com as vozes naturais).
+    Em Sistema dá para escolher o navegador padrão no lugar."""
+    import subprocess
+
+    if os.getenv("ABRIR_JARVIS", PADROES["ABRIR_JARVIS"]) == "janela":
+        edge = caminho_do_edge()
+        if edge:
+            subprocess.Popen([edge, f"--app={endereco}", "--window-size=1600,900"])
+            return "edge"
+        banco.registrar("sistema", "Edge não encontrado; abrindo no navegador padrão")
+    webbrowser.open(endereco)
+    return "padrao"
+
+
 if __name__ == "__main__":
     import uvicorn
 
     endereco = "http://127.0.0.1:8000"
     print(f"Jarvis rodando em {endereco} (Ctrl+C para desligar)")
     threading.Thread(target=_agendador, daemon=True).start()
-    threading.Timer(1.5, lambda: webbrowser.open(endereco)).start()
+    threading.Timer(1.5, lambda: abrir_interface(endereco)).start()
     # 127.0.0.1 = só o seu PC acessa. Nunca troque por 0.0.0.0 sem saber o que está fazendo.
     uvicorn.run(app, host="127.0.0.1", port=PORTA, log_level="warning")
