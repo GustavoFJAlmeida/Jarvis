@@ -308,6 +308,132 @@ class Cerebro(unittest.TestCase):
                                            {"role": "assistant", "content": "anotado"}])
 
 
+class WhisperFalso(types.ModuleType):
+    """Imita o faster-whisper: devolve o texto combinado e anota como foi chamado."""
+
+    def __init__(self):
+        super().__init__("faster_whisper")
+        self.texto = "que horas são"
+        self.carregados = []
+        self.chamadas = []
+        falso = self
+
+        class WhisperModel:
+            def __init__(self, nome, device, compute_type):
+                falso.carregados.append((nome, device, compute_type))
+
+            def transcribe(self, arquivo, **opcoes):
+                falso.chamadas.append((arquivo.read() if hasattr(arquivo, "read") else arquivo, opcoes))
+                partes = [N(text=" " + p) for p in falso.texto.split("|")] if falso.texto else []
+                return iter(partes), N(language="pt")
+
+        self.WhisperModel = WhisperModel
+
+
+whisper_falso = WhisperFalso()
+sys.modules["faster_whisper"] = whisper_falso
+import voz  # noqa: E402
+
+
+class Voz(unittest.TestCase):
+
+    def setUp(self):
+        voz._carregado.update(nome=None, modelo=None)
+        whisper_falso.carregados.clear()
+        whisper_falso.chamadas.clear()
+        whisper_falso.texto = "que horas são"
+        os.environ.pop("WHISPER_MODELO", None)
+
+    def test_transcreve_em_portugues(self):
+        r = voz.transcrever(b"audio-webm")
+        self.assertEqual(r, {"texto": "que horas são", "erro": None})
+        audio, opcoes = whisper_falso.chamadas[-1]
+        self.assertEqual(audio, b"audio-webm")
+        self.assertEqual(opcoes["language"], "pt")
+        self.assertTrue(opcoes["vad_filter"])
+
+    def test_junta_os_trechos(self):
+        whisper_falso.texto = "me lembra|de estudar"
+        self.assertEqual(voz.transcrever(b"x")["texto"], "me lembra de estudar")
+
+    def test_carrega_o_modelo_uma_vez_so(self):
+        voz.transcrever(b"x")
+        voz.transcrever(b"y")
+        self.assertEqual(whisper_falso.carregados, [("small", "cpu", "int8")])
+
+    def test_troca_de_modelo_em_sistema(self):
+        voz.transcrever(b"x")
+        os.environ["WHISPER_MODELO"] = "base"
+        voz.transcrever(b"x")
+        self.assertEqual([c[0] for c in whisper_falso.carregados], ["small", "base"])
+
+    def test_modelo_invalido_vira_small(self):
+        os.environ["WHISPER_MODELO"] = "gigante"
+        voz.transcrever(b"x")
+        self.assertEqual(whisper_falso.carregados[-1][0], "small")
+
+    def test_silencio(self):
+        whisper_falso.texto = ""
+        self.assertEqual(voz.transcrever(b"x"), {"texto": "", "erro": None})
+
+    def test_audio_vazio_nem_chama_o_whisper(self):
+        self.assertEqual(voz.transcrever(b"")["texto"], "")
+        self.assertEqual(whisper_falso.chamadas, [])
+
+    def test_audio_grande_demais(self):
+        self.assertIn("grande demais", voz.transcrever(b"0" * (voz.TAMANHO_MAXIMO + 1))["erro"])
+
+    def test_sem_faster_whisper_instalado(self):
+        sys.modules["faster_whisper"] = None  # simula "não instalado"
+        try:
+            r = voz.transcrever(b"x")
+        finally:
+            sys.modules["faster_whisper"] = whisper_falso
+        self.assertIn("pip install", r["erro"])
+
+    def test_wav_nao_passa_pelo_pyav(self):
+        """Erro já visto: o PyAV 19 quebrou o leitor do faster-whisper ('metadata_errors').
+        Áudio em WAV deve chegar ao Whisper já decodificado, sem usar o PyAV."""
+        import io
+        import wave as modulo_wave
+
+        import numpy as np
+        t = np.arange(16000) / 16000
+        onda = (np.sin(2 * np.pi * 440 * t) * 0.5 * 32767).astype("<i2")
+        arquivo = io.BytesIO()
+        with modulo_wave.open(arquivo, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(onda.tobytes())
+        voz.transcrever(arquivo.getvalue())
+        entregue, _ = whisper_falso.chamadas[-1]
+        self.assertIsInstance(entregue, np.ndarray)
+        self.assertEqual(entregue.dtype, np.float32)
+        self.assertEqual(len(entregue), 16000)
+
+    def test_wav_estereo_44khz_vira_16khz_mono(self):
+        import io
+        import wave as modulo_wave
+
+        import numpy as np
+        onda = (np.sin(2 * np.pi * 440 * np.arange(44100) / 44100) * 16000).astype("<i2")
+        arquivo = io.BytesIO()
+        with modulo_wave.open(arquivo, "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(44100)
+            w.writeframes(np.column_stack([onda, onda]).tobytes())
+        som = voz.ler_wav(arquivo.getvalue())
+        self.assertEqual(len(som), 16000)
+        pico = np.fft.rfftfreq(len(som), 1 / 16000)[np.argmax(np.abs(np.fft.rfft(som)))]
+        self.assertAlmostEqual(pico, 440, delta=2)
+
+    def test_configuracao_tem_padrao(self):
+        os.environ.pop("WHISPER_MODELO", None)
+        self.assertEqual(servidor._configuracoes_atuais()["WHISPER_MODELO"], "small")
+
+
 class Sistema(unittest.TestCase):
 
     def test_lista_modelos_instalados(self):
@@ -384,6 +510,20 @@ class Lembretes(unittest.TestCase):
         self.assertIn("Não entendi", ferramentas.criar_aviso("x", hora="depois do almoço"))
         self.assertIn("hoje ou amanhã", ferramentas.criar_aviso("x", dia="sexta", hora="10:00"))
         self.assertEqual(len(banco.avisos()), antes)
+
+    def test_sem_titulo_usa_o_texto(self):
+        """Erro já visto: o modelo chamou criar_aviso sem título e a ferramenta quebrou."""
+        r = ferramentas.criar_aviso(texto="Beber água", daqui_minutos=5)
+        self.assertIn("Beber água", r)
+        self.assertEqual(self._ultimo()["titulo"], "Beber água")
+
+    def test_sem_titulo_nem_texto_pede_de_novo(self):
+        antes = len(banco.avisos())
+        self.assertIn("Faltou dizer", ferramentas.criar_aviso(daqui_minutos=5))
+        self.assertEqual(len(banco.avisos()), antes)
+
+    def test_sem_titulo_pelo_executar(self):
+        self.assertNotIn("Erro na ferramenta", ferramentas.executar("criar_aviso", {"texto": "Treino"}))
 
     def test_sem_hora_aparece_agora(self):
         antes = banco.contar_nao_lidos()

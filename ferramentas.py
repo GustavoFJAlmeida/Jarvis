@@ -293,9 +293,14 @@ def lembrar(texto):
 _HORA = re.compile(r"\s*(\d{1,2})\s*(?:[:hH]\s*(\d{2})?)?\s*(?:h|hs|horas?)?\s*", re.IGNORECASE)
 
 
-def criar_aviso(titulo, texto="", dia=None, hora=None, daqui_minutos=None):
+def criar_aviso(titulo=None, texto="", dia=None, hora=None, daqui_minutos=None):
     """O modelo só copia o que o usuário falou; as contas de horário ficam aqui."""
     from datetime import timedelta
+
+    # erro já visto: o modelo chamou sem título. Usa o texto; sem nada, pede de novo.
+    titulo = (str(titulo or "").strip() or str(texto or "").strip())[:80]
+    if not titulo:
+        return "Faltou dizer do que é o lembrete. Pergunte ao usuário o que lembrar."
 
     agora = datetime.now().replace(second=0, microsecond=0)
     quando = None

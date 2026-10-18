@@ -157,6 +157,25 @@ O `python jarvis.py` (chat no terminal) continua funcionando também.
   "AGENDADO" e podem ser cancelados.
 - Se a notificação do Windows não aparecer, confira se o "Não incomodar" está desligado.
 
+## Voz (Fase 4a)
+
+1. Instale a parte de voz (uma vez só), com o `(.venv)` ativo:
+   ```
+   pip install -r requirements.txt
+   ```
+2. Clique no **microfone**, fale e espere: ele para sozinho quando você fica
+   1,5 segundo em silêncio (ou clique de novo para parar).
+3. O Jarvis responde em voz alta quando a pergunta foi falada.
+   Perguntas digitadas continuam só em texto.
+
+- Na **primeira vez**, o modelo de voz é baixado (o "small" tem uns 500 MB).
+  Pode demorar alguns minutos; nas próximas é rápido.
+- Na primeira vez o navegador pede permissão para o microfone: clique em **Permitir**.
+- Em **Sistema** dá para escolher o modelo do ouvido (base, small, medium) e a
+  voz das respostas, com um botão para testar.
+- A voz das respostas usa as vozes do Windows. Se não aparecer nenhuma em
+  português: Configurações do Windows > Hora e idioma > Fala > Adicionar vozes.
+
 ## Testes
 
 ```
@@ -190,6 +209,7 @@ desligue o servidor e apague a pasta `dados`.
 | `banco.py` | O banco de dados (avisos, memória, registro, conversa) |
 | `jarvis.py` | O chat no terminal |
 | `notificacao.py` | Notificação do Windows dos lembretes |
+| `voz.py` | Ouvido do Jarvis: transforma sua fala em texto (Whisper) |
 | `testes.py` | Testes automáticos (rode antes de mexer no código) |
 | `cerebros.py` | Os dois cérebros (Ollama e Claude) e o loop do agente |
 | `ferramentas.py` | As ferramentas: hora, clima, agenda, emails, abrir programas, buscar arquivos |

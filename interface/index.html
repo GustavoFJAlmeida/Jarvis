@@ -117,6 +117,11 @@ main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden}
 .quadrado.enviar{background:var(--ciano);color:#03131C;border-color:var(--ciano)}
 .quadrado.enviar:hover{box-shadow:0 0 18px rgba(57,230,255,.6)}
 .quadrado:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+.quadrado.gravando{background:var(--laranja);color:#170C00;border-color:var(--laranja);animation:pulsarBtn 1s ease-in-out infinite}
+@keyframes pulsarBtn{50%{box-shadow:0 0 22px rgba(255,159,28,.8)}}
+.reator.ouvindo .nucleo{animation:pulsar .6s ease-in-out infinite}
+.reator.ouvindo + .estado{color:var(--laranja)}
+@media (prefers-reduced-motion:reduce){.quadrado.gravando,.reator.ouvindo .nucleo{animation:none}}
 
 /* Widgets */
 .lateral{min-height:0;overflow-y:auto;overflow-x:hidden;padding:2px;display:flex;flex-direction:column;gap:14px}
@@ -281,7 +286,7 @@ main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden}
       <div class="hud caixa-msg"><div class="mensagens" id="mensagens" aria-live="polite"></div></div>
 
       <form class="entrada" id="form">
-        <button type="button" class="quadrado" disabled title="A voz chega na Fase 4" aria-label="Microfone (chega na Fase 4)">
+        <button type="button" class="quadrado" id="mic" title="Falar com o Jarvis (clique, fale e espere)" aria-label="Falar com o Jarvis" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
         </button>
         <label for="texto" class="sr">Mensagem</label>
@@ -355,8 +360,19 @@ main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden}
     <div class="campo"><label for="CLAUDE_MODELO">Modelo do Claude</label><input id="CLAUDE_MODELO" autocomplete="off"></div>
     <div class="campo"><label for="ANTHROPIC_API_KEY">Chave da API do Claude</label><input id="ANTHROPIC_API_KEY" type="password" autocomplete="off"><small id="info-chave"></small></div>
     <div class="campo"><label for="CIDADE_PADRAO">Cidade padrão</label><input id="CIDADE_PADRAO" autocomplete="off"></div>
+    <div class="campo"><label for="WHISPER_MODELO">Ouvido (modelo do Whisper)</label>
+      <select id="WHISPER_MODELO">
+        <option value="base">base: rápido, erra mais</option>
+        <option value="small">small: equilíbrio (recomendado)</option>
+        <option value="medium">medium: entende melhor, bem mais lento</option>
+      </select>
+      <small>Na primeira vez que você falar, o modelo é baixado (o small tem uns 500 MB).</small></div>
     <div><button class="btn primario" type="submit">Salvar e reiniciar cérebro</button></div>
   </form>
+  <div class="hud campos">
+    <div class="campo"><label for="voz">Voz das respostas</label><select id="voz"></select><small id="info-voz"></small></div>
+    <div><button class="btn" type="button" id="testar-voz">Testar voz</button></div>
+  </div>
 </section>
 
 <!-- ============ REGISTRO ============ -->
@@ -545,6 +561,8 @@ function conectar() {
       mostrarBadge(dados.avisos);
       pensando(false);
       atualizarPainel();
+      if (respostaFalada) falar(dados.texto);
+      respostaFalada = false;
     } else if (dados.tipo === "lembrete") {
       mostrarBadge(dados.avisos);
       mostrarAlerta(dados.titulo, dados.texto);
@@ -563,6 +581,200 @@ $("form").addEventListener("submit", (e) => {
   $("texto").style.height = "";
   pensando(true);
 });
+/* ---------- Voz: ouvir (microfone) e falar ---------- */
+let respostaFalada = false;
+let gravador = null, pedacosAudio = [], fluxoMic = null, ctxAudio = null, limiteGravacao = null;
+
+function ouvindo(ativo, texto) {
+  $("mic").classList.toggle("gravando", ativo);
+  $("mic").setAttribute("aria-pressed", ativo ? "true" : "false");
+  $("orbe").classList.toggle("ouvindo", ativo);
+  $("estado").textContent = texto || (ativo ? "Ouvindo" : "Pronto");
+}
+
+async function comecarGravar() {
+  if (esperando) return;
+  pararDeFalar();
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    adicionarMensagem("jarvis", "Este navegador não deixa gravar áudio. Tente pelo Chrome ou Edge.");
+    return;
+  }
+  try {
+    fluxoMic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch {
+    ouvindo(false, "Sem microfone");
+    adicionarMensagem("jarvis", "Não consegui usar o microfone. Clique no cadeado ao lado do endereço (127.0.0.1:8000), permita o microfone e tente de novo.");
+    return;
+  }
+  pedacosAudio = [];
+  gravador = new MediaRecorder(fluxoMic);
+  gravador.ondataavailable = (e) => { if (e.data && e.data.size) pedacosAudio.push(e.data); };
+  gravador.onstop = enviarAudio;
+  gravador.start(250);
+  ouvindo(true);
+  vigiarSilencio(fluxoMic);
+  limiteGravacao = setTimeout(pararGravar, 20000); // no máximo 20 segundos
+}
+
+function pararGravar() {
+  if (gravador && gravador.state === "recording") gravador.stop();
+}
+
+function soltarMicrofone() {
+  clearTimeout(limiteGravacao);
+  if (fluxoMic) fluxoMic.getTracks().forEach((t) => t.stop());
+  fluxoMic = null;
+  if (ctxAudio) { ctxAudio.close().catch(() => {}); ctxAudio = null; }
+}
+
+/* para sozinho quando você fica 1,5 s em silêncio depois de falar.
+   O "barulho de fundo" é o volume mais baixo ouvido até agora (não só o começo),
+   para funcionar mesmo se você começar a falar logo depois de clicar. */
+function vigiarSilencio(fluxo) {
+  try {
+    ctxAudio = new (window.AudioContext || window.webkitAudioContext)();
+    const analisador = ctxAudio.createAnalyser();
+    analisador.fftSize = 1024;
+    ctxAudio.createMediaStreamSource(fluxo).connect(analisador);
+    const amostras = new Uint8Array(analisador.fftSize);
+    const inicio = performance.now();
+    let suave = 0, piso = Infinity, falou = false, ultimoSom = inicio;
+    const passo = () => {
+      if (!gravador || gravador.state !== "recording") return;
+      analisador.getByteTimeDomainData(amostras);
+      let soma = 0;
+      for (const v of amostras) { const x = (v - 128) / 128; soma += x * x; }
+      const volume = Math.sqrt(soma / amostras.length);
+      suave = suave ? suave * 0.7 + volume * 0.3 : volume;
+      const agora = performance.now();
+      if (agora - inicio > 100) piso = Math.min(piso, suave);
+      const limiar = Math.min(0.08, Math.max(0.02, (isFinite(piso) ? piso : 0) * 3));
+      if (suave > limiar) { falou = true; ultimoSom = agora; }
+      if (falou && agora - ultimoSom > 1500) return pararGravar();
+      if (!falou && agora - inicio > 8000) return pararGravar(); // ninguém falou
+      setTimeout(passo, 50);
+    };
+    passo();
+  } catch { /* sem detector: para no clique ou em 20 s */ }
+}
+
+/* converte a gravação para WAV 16 kHz mono (o formato que o Whisper usa).
+   Assim o servidor não depende do PyAV, que quebrou numa atualização. */
+async function paraWav16k(gravacao) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  let som;
+  try { som = await ctx.decodeAudioData(await gravacao.arrayBuffer()); }
+  finally { ctx.close().catch(() => {}); }
+  const taxa = 16000;
+  const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(som.duration * taxa)), taxa);
+  const fonte = offline.createBufferSource();
+  fonte.buffer = som;
+  fonte.connect(offline.destination);
+  fonte.start();
+  const mono = (await offline.startRendering()).getChannelData(0);
+  const bytes = new ArrayBuffer(44 + mono.length * 2);
+  const v = new DataView(bytes);
+  const texto = (pos, t) => { for (let i = 0; i < t.length; i++) v.setUint8(pos + i, t.charCodeAt(i)); };
+  texto(0, "RIFF"); v.setUint32(4, 36 + mono.length * 2, true); texto(8, "WAVE");
+  texto(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, taxa, true); v.setUint32(28, taxa * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  texto(36, "data"); v.setUint32(40, mono.length * 2, true);
+  for (let i = 0; i < mono.length; i++) {
+    const amostra = Math.max(-1, Math.min(1, mono[i]));
+    v.setInt16(44 + i * 2, amostra < 0 ? amostra * 0x8000 : amostra * 0x7fff, true);
+  }
+  return new Blob([bytes], { type: "audio/wav" });
+}
+
+async function enviarAudio() {
+  const tipo = gravador ? gravador.mimeType : "audio/webm";
+  gravador = null;
+  soltarMicrofone();
+  if (!pedacosAudio.length) { ouvindo(false, "Não ouvi nada"); return; }
+  ouvindo(false, "Transcrevendo");
+  $("orbe").classList.add("pensando");
+  let r;
+  const gravacao = new Blob(pedacosAudio, { type: tipo });
+  let corpo = gravacao;
+  try { corpo = await paraWav16k(gravacao); } catch { /* se não converter, manda o original */ }
+  try {
+    const resposta = await fetch("/api/ouvir", { method: "POST", body: corpo });
+    r = await resposta.json();
+  } catch {
+    r = { texto: "", erro: "Não consegui falar com o servidor do Jarvis." };
+  }
+  $("orbe").classList.remove("pensando");
+  if (r.erro) { ouvindo(false, "Erro na voz"); adicionarMensagem("jarvis", r.erro); return; }
+  if (!r.texto) { ouvindo(false, "Não ouvi nada"); return; }
+  $("texto").value = r.texto;
+  respostaFalada = true;
+  $("form").requestSubmit();
+}
+
+$("mic").addEventListener("click", () => {
+  if (gravador && gravador.state === "recording") pararGravar();
+  else comecarGravar();
+});
+
+/* fala: usa as vozes do próprio Windows/navegador (não precisa instalar nada) */
+function chaveVoz(valor) {
+  try {
+    if (valor === undefined) return localStorage.getItem("jarvis-voz") || "";
+    localStorage.setItem("jarvis-voz", valor);
+  } catch { return ""; }
+}
+function vozesPortugues() {
+  if (!window.speechSynthesis) return [];
+  return speechSynthesis.getVoices().filter((v) => v.lang && v.lang.toLowerCase().startsWith("pt"));
+}
+function vozEscolhida() {
+  const vozes = vozesPortugues();
+  return vozes.find((v) => v.name === chaveVoz()) || vozes.find((v) => v.lang === "pt-BR") || vozes[0] || null;
+}
+function textoParaFalar(texto) {
+  return (texto || "")
+    .replace(/https?:\/\/\S+/g, "link")
+    .replace(/[*_#`>|]/g, " ")
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([.,!?;:])/g, "$1")
+    .trim();
+}
+function falar(texto) {
+  if (!window.speechSynthesis) return;
+  const limpo = textoParaFalar(texto);
+  if (!limpo) return;
+  speechSynthesis.cancel();
+  const fala = new SpeechSynthesisUtterance(limpo);
+  const voz = vozEscolhida();
+  if (voz) fala.voice = voz;
+  fala.lang = voz ? voz.lang : "pt-BR";
+  fala.onstart = () => { $("orbe").classList.add("pensando"); $("estado").textContent = "Falando"; };
+  fala.onend = fala.onerror = () => { $("orbe").classList.remove("pensando"); if (!esperando) $("estado").textContent = "Pronto"; };
+  speechSynthesis.speak(fala);
+}
+function pararDeFalar() {
+  if (window.speechSynthesis) speechSynthesis.cancel();
+}
+function preencherVozes() {
+  const sel = $("voz");
+  const vozes = vozesPortugues();
+  sel.innerHTML = "";
+  if (!vozes.length) {
+    sel.appendChild(elemento("option", "", "Nenhuma voz em português encontrada"));
+    $("info-voz").textContent = "Instale uma voz em Configurações do Windows > Hora e idioma > Fala.";
+    return;
+  }
+  vozes.forEach((v) => {
+    const op = elemento("option", "", `${v.name} (${v.lang})`);
+    op.value = v.name;
+    sel.appendChild(op);
+  });
+  sel.value = (vozEscolhida() || vozes[0]).name;
+  $("info-voz").textContent = "Fica salva só neste navegador.";
+}
+if (window.speechSynthesis) speechSynthesis.onvoiceschanged = () => { if ($("voz")) preencherVozes(); };
+
 $("texto").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); }
 });
@@ -690,7 +902,7 @@ $("form-mem").addEventListener("submit", async (e) => {
 });
 
 /* ---------- Sistema ---------- */
-const CAMPOS = ["CEREBRO", "OLLAMA_MODELO", "CLAUDE_MODELO", "CIDADE_PADRAO"];
+const CAMPOS = ["CEREBRO", "OLLAMA_MODELO", "CLAUDE_MODELO", "CIDADE_PADRAO", "WHISPER_MODELO"];
 function preencherModelos(lista, atual) {
   const sel = $("OLLAMA_MODELO");
   sel.innerHTML = "";
@@ -718,7 +930,7 @@ function mostrarConfig(cfg) {
   s.className = "hud status-cfg " + (cfg.cerebro_ligado ? "ok" : "ruim");
   s.textContent = cfg.cerebro_ligado ? `> CÉREBRO ONLINE: ${cfg.cerebro_nome}` : `> CÉREBRO OFFLINE: ${cfg.erro}`;
 }
-carregadores.configuracoes = async () => mostrarConfig(await api("/api/config"));
+carregadores.configuracoes = async () => { mostrarConfig(await api("/api/config")); preencherVozes(); };
 $("form-cfg").addEventListener("submit", async (e) => {
   e.preventDefault();
   const novas = {};
@@ -727,6 +939,9 @@ $("form-cfg").addEventListener("submit", async (e) => {
   mostrarConfig(await api("/api/config", { method: "POST", body: JSON.stringify(novas) }));
   atualizarPainel();
 });
+
+$("voz").addEventListener("change", () => chaveVoz($("voz").value));
+$("testar-voz").addEventListener("click", () => falar("Olá! Eu sou o Jarvis. Sistemas online."));
 
 /* ---------- Registro ---------- */
 carregadores.registro = async () => {

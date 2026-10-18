@@ -24,6 +24,7 @@ from pydantic import BaseModel  # noqa: E402
 import banco  # noqa: E402
 import ferramentas  # noqa: E402
 import notificacao  # noqa: E402
+import voz  # noqa: E402
 from cerebros import criar_cerebro  # noqa: E402
 
 PORTA = 8000
@@ -307,7 +308,11 @@ def listar_registro():
 
 # ---------- Configurações ----------
 
-CAMPOS = ["CEREBRO", "OLLAMA_MODELO", "CLAUDE_MODELO", "CIDADE_PADRAO"]
+CAMPOS = ["CEREBRO", "OLLAMA_MODELO", "CLAUDE_MODELO", "CIDADE_PADRAO", "WHISPER_MODELO"]
+
+
+PADROES = {"CEREBRO": "ollama", "OLLAMA_MODELO": "qwen2.5:7b", "WHISPER_MODELO": "small",
+           "CIDADE_PADRAO": "São José dos Campos"}
 
 
 class Configuracoes(BaseModel):
@@ -315,6 +320,7 @@ class Configuracoes(BaseModel):
     OLLAMA_MODELO: str | None = None
     CLAUDE_MODELO: str | None = None
     CIDADE_PADRAO: str | None = None
+    WHISPER_MODELO: str | None = None
     ANTHROPIC_API_KEY: str | None = None
 
 
@@ -322,12 +328,19 @@ def _configuracoes_atuais():
     chave = os.getenv("ANTHROPIC_API_KEY", "")
     cerebro = estado["cerebro"]
     return {
-        **{campo: os.getenv(campo, "") for campo in CAMPOS},
+        **{campo: os.getenv(campo) or PADROES.get(campo, "") for campo in CAMPOS},
         "tem_chave": bool(chave) and chave != "cole-sua-chave-aqui",  # a chave nunca sai do servidor
         "cerebro_ligado": cerebro is not None,
         "cerebro_nome": f"{type(cerebro).__name__} · {cerebro.modelo}" if cerebro else "",
         "erro": estado["erro"],
     }
+
+
+@app.post("/api/ouvir")
+async def ouvir(request: Request):
+    """Recebe a gravação do microfone e devolve o texto falado."""
+    audio = await request.body()
+    return await asyncio.to_thread(voz.transcrever, audio)
 
 
 @app.get("/api/modelos")
